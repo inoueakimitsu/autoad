@@ -240,10 +240,9 @@ def main():
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
 
-    if sync_remote:
-        subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
-
     for iteration_number in range(1, iterations + 1):
+        if sync_remote:
+            subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
 
         prompt = (
             "# Overview of the Optimization Activity\n"
@@ -396,8 +395,8 @@ def main():
             continue_conversation=True,
         )
 
-    if sync_remote:
-        subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
+        if sync_remote:
+            subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
 
 if __name__ == "__main__":
     main()
