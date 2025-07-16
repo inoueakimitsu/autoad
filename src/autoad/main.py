@@ -1,8 +1,16 @@
+"""Automated algorithm design tool using AI-assisted code optimization.
+
+This module implements an evolutionary algorithm approach to code optimization,
+using Git branches to explore different optimization strategies and Claude CLI
+for code improvements. It supports multi-objective optimization with automated
+evaluation and branch selection based on genetic algorithm principles.
+"""
 import argparse
 import os
 import subprocess
 import shlex
 import sys
+from typing import List, Tuple, Optional
 
 # Sets the maximum number of turns for each Claude CLI iteration.
 # One turn represents one response from Claude.
@@ -10,7 +18,10 @@ import sys
 MAX_TURNS_IN_EACH_ITERATION = 1000
 
 # Sets the timeout for subprocess execution in seconds
-SUBPROCESS_TIMEOUT = 60 * 60 * 2  # 2 hours
+SECONDS_PER_MINUTE = 60
+MINUTES_PER_HOUR = 60
+SUBPROCESS_TIMEOUT_HOURS = 2
+SUBPROCESS_TIMEOUT = SECONDS_PER_MINUTE * MINUTES_PER_HOUR * SUBPROCESS_TIMEOUT_HOURS
 
 # Sets the number of significant digits for the evaluation metric values.
 # The evaluation metric values are rounded to this number of significant digits.
@@ -116,7 +127,8 @@ Examples:
     parser.add_argument(
         "--branch-prefix",
         default=os.environ.get("autoad_BRANCH_PREFIX", "optimize"),
-        help="Prefix for optimization branches (default: 'optimize', can be set via autoad_BRANCH_PREFIX env var)",
+        help="Prefix for optimization branches (default: 'optimize', "
+        "can be set via autoad_BRANCH_PREFIX env var)",
     )
 
     parser.add_argument(
@@ -135,9 +147,9 @@ Examples:
 def run_claude_with_prompt(
     prompt: str,
     max_turns: int,
-    allowed_tools: list[str],
+    allowed_tools: List[str],
     continue_conversation: bool = False,
-) -> list[str]:
+) -> List[str]:
     """Run a conversation with Claude.
 
     Args:
@@ -176,7 +188,7 @@ def run_claude_with_prompt(
         " ".join(command_options)
     ]
     collected_output = []
-    process = subprocess.Popen(
+    with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -185,73 +197,79 @@ def run_claude_with_prompt(
         bufsize=1,
         universal_newlines=True,
         shell=False,
-    )
+    ) as process:
+        # Verify process streams are not None
+        if process.stdin is None:
+            raise RuntimeError("Process stdin stream is None")
+        if process.stdout is None:
+            raise RuntimeError("Process stdout stream is None")
+        if process.stderr is None:
+            raise RuntimeError("Process stderr stream is None")
 
-    # Verify process streams are not None
-    if process.stdin is None:
-        raise RuntimeError("Process stdin stream is None")
-    if process.stdout is None:
-        raise RuntimeError("Process stdout stream is None")
-    if process.stderr is None:
-        raise RuntimeError("Process stderr stream is None")
+        # Write prompt to stdin
+        process.stdin.write(shlex.quote(prompt))
+        process.stdin.close()  # Complete input
 
-    # Write prompt to stdin
-    process.stdin.write(shlex.quote(prompt))
-    process.stdin.close()  # Complete input
+        try:
+            # Stream stdout
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                print(line, end="", flush=True)
+                collected_output.append(line)
 
-    try:
-        # Stream stdout
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            print(line, end="", flush=True)
-            collected_output.append(line)
+            # Stream stderr
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                print(stderr_output, file=sys.stderr, flush=True)
 
-        # Stream stderr
-        stderr_output = process.stderr.read()
-        if stderr_output:
-            print(stderr_output, file=sys.stderr, flush=True)
+            # Wait for process to complete
+            return_code = process.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(
+                    return_code,
+                    command,
+                    stderr=stderr_output
+                )
 
-        # Wait for process to complete
-        return_code = process.wait()
-        if return_code != 0:
-            raise subprocess.CalledProcessError(
-                return_code,
+            return collected_output
+
+        except subprocess.TimeoutExpired as e:
+            process.kill()
+            raise subprocess.TimeoutExpired(
                 command,
-                stderr=stderr_output
-            )
+                SUBPROCESS_TIMEOUT,
+            ) from e
 
-        return collected_output
-
-    except subprocess.TimeoutExpired as e:
-        process.kill()
-        raise subprocess.TimeoutExpired(
-            command,
-            SUBPROCESS_TIMEOUT,
-        ) from e
-
-def main():
+def main() -> None:
+    """Entry point for the autoad optimization tool.
+    
+    Orchestrates the multi-objective optimization process using evolutionary
+    algorithms and Claude CLI for code improvements.
+    """
     args = parse_args()
     improvement_prompt: str = args.improvement_prompt
-    objectives: list[tuple[str, str]] = [(name, prompt) for name, prompt in args.objective]
+    objectives: List[Tuple[str, str]] = list(args.objective)
     branch_prefix: str = args.branch_prefix
-    optional_prompt: str | None = args.optional_prompt
+    optional_prompt: Optional[str] = args.optional_prompt
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
 
-    if sync_remote:
-        subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
-
-    for iteration_number in range(1, iterations + 1):
+    for _ in range(1, iterations + 1):
+        if sync_remote:
+            subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
 
         prompt = (
             "# Overview of the Optimization Activity\n"
-            "Background: we are carrying out an optimization initiative and are testing multiple approaches in parallel.\n"
+            "Background: we are carrying out an optimization initiative and "
+            "are testing multiple approaches in parallel.\n"
             "Each approach is managed as a Git branch under the following rules:\n"
             "- One branch corresponds to one optimization approach.\n"
             "- Improvements are performed by creating a new branch based on an existing branch.\n"
-            "  (Ordinarily, branch proliferation would be discouraged, but for this initiative we deliberately permit it, as Git branches serve as the data structure for exploring alternative approaches.)\n"
+            "  (Ordinarily, branch proliferation would be discouraged, but for this "
+            "initiative we deliberately permit it, as Git branches serve as the data "
+            "structure for exploring alternative approaches.)\n"
             "\n"
             "# Instructions\n"
             "Proceed through the following tasks in order:\n"
@@ -271,9 +289,12 @@ def main():
         prompt += (
             "\n"
             "# Branch-Selection Policy\n"
-            "By emulating evolutionary and genetic algorithms, choose the optimal branch to use as the basis for improvements from the following four perspectives:\n"
+            "By emulating evolutionary and genetic algorithms, choose the optimal "
+            "branch to use as the basis for improvements from the following four "
+            "perspectives:\n"
             "1. Deepening Improvements (exploitation)\n"
-            "   - Further improve a branch whose evaluation score is already relatively high, or a branch whose score is low but shows growth potential.\n"
+            "   - Further improve a branch whose evaluation score is already relatively "
+            "high, or a branch whose score is low but shows growth potential.\n"
             "\n"
             "2. Exploration (exploration)\n"
             "   - Search for better solutions by trying out new ideas.\n"
@@ -283,32 +304,39 @@ def main():
             "   - Produce new improvement methods by combining existing techniques.\n"
             "\n"
             "4. Ablation (ablation)\n"
-            "   - Roll back some of the changes added in existing branches, observe their impact, and use that knowledge to devise solutions.\n"
+            "   - Roll back some of the changes added in existing branches, observe "
+            "their impact, and use that knowledge to devise solutions.\n"
             "   - Accumulate knowledge that identifies the causes of improvements or regressions.\n"
             "\n"
             "# How to Use Evaluation Information\n"
             "Refer to the following information when evaluating each branch:\n"
-            f"- Evaluation metrics recorded in Git tags (see them with `git tag -l '{branch_prefix}-eval-*' --sort=-version:refname`)\n"
+            f"- Evaluation metrics recorded in Git tags "
+            f"(see them with `git tag -l '{branch_prefix}-eval-*' --sort=-version:refname`)\n"
             "- Tags associated with each commit (`git tag --contains <commit-hash>`)\n"
             "- Change descriptions in commit messages\n"
             "\n"
             "# Detailed Work Procedure\n"
             "1. Check out the optimal branch selected by the policy above.\n"
-            f"   Only branches whose names start with the prefix `{branch_prefix}/` may be checked out.\n"
-            f"   If no branch with the `{branch_prefix}/` prefix exists, use the current branch as the starting point.\n"
+            f"   Only branches whose names start with the prefix "
+            f"`{branch_prefix}/` may be checked out.\n"
+            f"   If no branch with the `{branch_prefix}/` prefix exists, "
+            f"use the current branch as the starting point.\n"
             "2. Create a new derivative branch based on that branch.\n"
             "3. If necessary, incorporate ideas from other branches using the commands below:\n"
             "   - `git merge` or `git cherry-pick` when you actually want to pull in code\n"
             "   - `git merge --no-ff -s ours <branch-to-merge>` when you only adopt the idea\n"
             "4. After planning, start the improvement work:\n"
             "   - Consider conducting a literature survey.\n"
-            "   - Most importantly, run experiments such as debugging and analyzing intermediate results, observe the outcomes, and devise your solution accordingly.\n"
+            "   - Most importantly, run experiments such as debugging and analyzing "
+            "intermediate results, observe the outcomes, and devise your solution accordingly.\n"
             "   - Do not commit yet; I will tell you when to commit.\n"
             "\n"
             "# Naming Convention for the New Branch\n"
             f"- Prefix  : Must start with `{branch_prefix}/`.\n"
-            "- Name   : Concatenate 2–4 English words that describe the improvement, separated by hyphens (-).\n"
-            f"- Examples : `{branch_prefix}/remove-temporal-reward`, `{branch_prefix}/prefetch-fisher-info-matrix`\n"
+            "- Name   : Concatenate 2–4 English words that describe the improvement, "
+            "separated by hyphens (-).\n"
+            f"- Examples : `{branch_prefix}/remove-temporal-reward`, "
+            f"`{branch_prefix}/prefetch-fisher-info-matrix`\n"
             "- Note   : Do not include meta-information such as dates, scores, or assignee names.\n"
             "\n"
             "# Notes\n"
@@ -336,12 +364,14 @@ def main():
             "When writing the commit message, observe the following rules:\n"
             "- Uninformative expressions such as \"Fix bug\" or \"Update code\" are prohibited.\n"
             "- Do not include unnecessary long logs or stack traces.\n"
-            "- Because it is not yet known whether this commit leads to an improvement, avoid value-laden wording.\n"
+            "- Because it is not yet known whether this commit leads to an improvement, "
+            "avoid value-laden wording.\n"
             "\n"
             "After adding the necessary files, run\n"
             '`git commit -m "$FULL_MESSAGE"`\n'
             "to create the commit once the message is ready.\n"
-            "If you referred to or copied information from another branch, include at least the fact that it was merged in the commit message.\n"
+            "If you referred to or copied information from another branch, "
+            "include at least the fact that it was merged in the commit message.\n"
             "If you adopted only the idea and discarded the code itself, you may also use\n"
             "`git merge --no-ff -s ours <branch-to-merge>` to record that.\n"
             "Note: The timing for adding Git tags will be given later, so do not tag yet.\n"
@@ -362,9 +392,9 @@ def main():
             continue_conversation=True,
         )
 
-        for i_objective_name, (objective_name, objective_prompt) in enumerate(objectives):
+        for objective_index, (objective_name, objective_prompt) in enumerate(objectives):
             objective_prompt = (
-                f"# Evaluation Task {i_objective_name + 1}\n"
+                f"# Evaluation Task {objective_index + 1}\n"
                 "Carry out the evaluation task as instructed below.\n"
                 f"{objective_prompt}\n"
                 f"The value obtained will be the evaluation metric for \"{objective_name}\".\n"
@@ -382,11 +412,14 @@ def main():
             "# Creating the Git Tag\n"
             "Create a Git tag in accordance with the following instructions.\n"
             "The tag name must follow this format:\n"
-            f"{branch_prefix}-eval-YYYYMMDD-HHMMSS-metricName1_metricValue1-metricName2_metricValue2-...\n"
+            f"{branch_prefix}-eval-YYYYMMDD-HHMMSS-"
+            "metricName1_metricValue1-metricName2_metricValue2-...\n"
             "After deciding on the tag name, run\n"
             "`git --no-pager tag -a <tag-name>`\n"
             "to create the tag. Create it for the current HEAD commit.\n"
-            f"The number of significant digits for metric values is {NUMBER_OF_SIGNIFICANT_DIGITS_FOR_EVALUATION_METRIC_VALUES}. Scientific notation is acceptable.\n"
+            f"The number of significant digits for metric values is "
+            f"{NUMBER_OF_SIGNIFICANT_DIGITS_FOR_EVALUATION_METRIC_VALUES}. "
+            f"Scientific notation is acceptable.\n"
         )
 
         run_claude_with_prompt(
@@ -396,8 +429,8 @@ def main():
             continue_conversation=True,
         )
 
-    if sync_remote:
-        subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
+        if sync_remote:
+            subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
 
 if __name__ == "__main__":
     main()
