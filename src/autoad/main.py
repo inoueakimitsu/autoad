@@ -127,7 +127,8 @@ Examples:
     parser.add_argument(
         "--branch-prefix",
         default=os.environ.get("autoad_BRANCH_PREFIX", "optimize"),
-        help="Prefix for optimization branches (default: 'optimize', can be set via autoad_BRANCH_PREFIX env var)",
+        help="Prefix for optimization branches (default: 'optimize', "
+        "can be set via autoad_BRANCH_PREFIX env var)",
     )
 
     parser.add_argument(
@@ -187,7 +188,7 @@ def run_claude_with_prompt(
         " ".join(command_options)
     ]
     collected_output = []
-    process = subprocess.Popen(
+    with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -196,51 +197,50 @@ def run_claude_with_prompt(
         bufsize=1,
         universal_newlines=True,
         shell=False,
-    )
+    ) as process:
+        # Verify process streams are not None
+        if process.stdin is None:
+            raise RuntimeError("Process stdin stream is None")
+        if process.stdout is None:
+            raise RuntimeError("Process stdout stream is None")
+        if process.stderr is None:
+            raise RuntimeError("Process stderr stream is None")
 
-    # Verify process streams are not None
-    if process.stdin is None:
-        raise RuntimeError("Process stdin stream is None")
-    if process.stdout is None:
-        raise RuntimeError("Process stdout stream is None")
-    if process.stderr is None:
-        raise RuntimeError("Process stderr stream is None")
+        # Write prompt to stdin
+        process.stdin.write(shlex.quote(prompt))
+        process.stdin.close()  # Complete input
 
-    # Write prompt to stdin
-    process.stdin.write(shlex.quote(prompt))
-    process.stdin.close()  # Complete input
+        try:
+            # Stream stdout
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                print(line, end="", flush=True)
+                collected_output.append(line)
 
-    try:
-        # Stream stdout
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            print(line, end="", flush=True)
-            collected_output.append(line)
+            # Stream stderr
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                print(stderr_output, file=sys.stderr, flush=True)
 
-        # Stream stderr
-        stderr_output = process.stderr.read()
-        if stderr_output:
-            print(stderr_output, file=sys.stderr, flush=True)
+            # Wait for process to complete
+            return_code = process.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(
+                    return_code,
+                    command,
+                    stderr=stderr_output
+                )
 
-        # Wait for process to complete
-        return_code = process.wait()
-        if return_code != 0:
-            raise subprocess.CalledProcessError(
-                return_code,
+            return collected_output
+
+        except subprocess.TimeoutExpired as e:
+            process.kill()
+            raise subprocess.TimeoutExpired(
                 command,
-                stderr=stderr_output
-            )
-
-        return collected_output
-
-    except subprocess.TimeoutExpired as e:
-        process.kill()
-        raise subprocess.TimeoutExpired(
-            command,
-            SUBPROCESS_TIMEOUT,
-        ) from e
+                SUBPROCESS_TIMEOUT,
+            ) from e
 
 def main() -> None:
     """Entry point for the autoad optimization tool.
@@ -250,13 +250,13 @@ def main() -> None:
     """
     args = parse_args()
     improvement_prompt: str = args.improvement_prompt
-    objectives: List[Tuple[str, str]] = [(name, prompt) for name, prompt in args.objective]
+    objectives: List[Tuple[str, str]] = list(args.objective)
     branch_prefix: str = args.branch_prefix
     optional_prompt: Optional[str] = args.optional_prompt
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
 
-    for iteration_number in range(1, iterations + 1):
+    for _ in range(1, iterations + 1):
         if sync_remote:
             subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
 
@@ -317,7 +317,8 @@ def main() -> None:
             "\n"
             "# Detailed Work Procedure\n"
             "1. Check out the optimal branch selected by the policy above.\n"
-            f"   Only branches whose names start with the prefix `{branch_prefix}/` may be checked out.\n"
+            f"   Only branches whose names start with the prefix "
+            f"`{branch_prefix}/` may be checked out.\n"
             f"   If no branch with the `{branch_prefix}/` prefix exists, "
             f"use the current branch as the starting point.\n"
             "2. Create a new derivative branch based on that branch.\n"
@@ -332,8 +333,10 @@ def main() -> None:
             "\n"
             "# Naming Convention for the New Branch\n"
             f"- Prefix  : Must start with `{branch_prefix}/`.\n"
-            "- Name   : Concatenate 2–4 English words that describe the improvement, separated by hyphens (-).\n"
-            f"- Examples : `{branch_prefix}/remove-temporal-reward`, `{branch_prefix}/prefetch-fisher-info-matrix`\n"
+            "- Name   : Concatenate 2–4 English words that describe the improvement, "
+            "separated by hyphens (-).\n"
+            f"- Examples : `{branch_prefix}/remove-temporal-reward`, "
+            f"`{branch_prefix}/prefetch-fisher-info-matrix`\n"
             "- Note   : Do not include meta-information such as dates, scores, or assignee names.\n"
             "\n"
             "# Notes\n"
@@ -361,7 +364,8 @@ def main() -> None:
             "When writing the commit message, observe the following rules:\n"
             "- Uninformative expressions such as \"Fix bug\" or \"Update code\" are prohibited.\n"
             "- Do not include unnecessary long logs or stack traces.\n"
-            "- Because it is not yet known whether this commit leads to an improvement, avoid value-laden wording.\n"
+            "- Because it is not yet known whether this commit leads to an improvement, "
+            "avoid value-laden wording.\n"
             "\n"
             "After adding the necessary files, run\n"
             '`git commit -m "$FULL_MESSAGE"`\n'
@@ -408,7 +412,8 @@ def main() -> None:
             "# Creating the Git Tag\n"
             "Create a Git tag in accordance with the following instructions.\n"
             "The tag name must follow this format:\n"
-            f"{branch_prefix}-eval-YYYYMMDD-HHMMSS-metricName1_metricValue1-metricName2_metricValue2-...\n"
+            f"{branch_prefix}-eval-YYYYMMDD-HHMMSS-"
+            "metricName1_metricValue1-metricName2_metricValue2-...\n"
             "After deciding on the tag name, run\n"
             "`git --no-pager tag -a <tag-name>`\n"
             "to create the tag. Create it for the current HEAD commit.\n"
