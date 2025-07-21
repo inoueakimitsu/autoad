@@ -35,6 +35,14 @@ BASE_ALLOWED_TOOLS = [
     # File system operations
     "Bash(ls:*)",
     "Bash(cat:*)", 
+    "Bash(tail:*)",
+    "Bash(head:*)",
+    "Bash(mv:*)",
+    "Bash(cp:*)",
+    "Bash(rm:*)",
+    "Bash(mkdir:*)",
+    "Bash(rmdir:*)",
+    "Bash(touch:*)",
     "Bash(find:*)",
     "Bash(grep:*)",
     "Bash(rg:*)",
@@ -78,6 +86,16 @@ BASE_ALLOWED_TOOLS = [
     "Bash(uv remove:*)",
     # Code quality tools
     "Bash(ruff:*)",
+    # Code execution and testing
+    "Bash(python:*)",
+    "Bash(python3:*)",
+    "Bash(uvx:*)",
+    "Bash(bash:*)",
+    "Bash(node:*)",
+    "Bash(npx:*)",
+    "Bash(npm:*)",
+    # Long-running processes
+    "Bash(nohup:*)",
     # Special tools (called directly)
     "mcp__o3",
 ]
@@ -399,6 +417,33 @@ def main() -> None:
                 f"{objective_prompt}\n"
                 f"The value obtained will be the evaluation metric for \"{objective_name}\".\n"
                 "Note: The timing for adding Git tags will be given later, so do not tag yet.\n"
+            )
+
+            objective_prompt += (
+                "If processing takes time, execute it in the background using `nohup`.\n"
+                " After execution, obtain the process ID and periodically run the `ps` command.\n"
+                " Each time, if the command is still running, execute the `sleep 60` command to wait for 1 minute.\n"
+                " Repeat this wait up to a maximum of 120 times. \n"            
+                "For example, refer to the following code when executing.: \n"
+"""
+    #!/bin/bash
+    nohup your_command_here > process_output.log 2>&1 &
+    pid=$!
+    echo "Process started with PID: $pid"
+    tail -f process_output.log &
+    tail_pid=$!
+    for i in {1..120}; do
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "Attempt $i: Process still running"
+            sleep 60
+        else
+            echo "Process completed after $i attempts"
+            break
+        fi
+    done
+    kill "$tail_pid"
+    echo "Monitoring finished. Output log: process_output.log"
+"""
             )
 
             run_claude_with_prompt(
