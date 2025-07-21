@@ -4,7 +4,9 @@ version = "0.1.1"
 description = "A simple automatic algorithm design tool"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "pytest>=8.4.1",
+]
 
 [project.scripts]
 autoad = "autoad.main:main"

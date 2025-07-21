@@ -11,6 +11,9 @@ import subprocess
 import shlex
 import sys
 from typing import List, Tuple, Optional
+from datetime import datetime
+
+from .logging_utils import LoggingManager, set_logging_manager
 
 # Sets the maximum number of turns for each Claude CLI iteration.
 # One turn represents one response from Claude.
@@ -163,6 +166,19 @@ Examples:
         help="Sync remote branches with local branches",
     )
 
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default=None,
+        help="Directory to save execution logs (default: ~/.autoad/logs)",
+    )
+
+    parser.add_argument(
+        "--no-logging",
+        action="store_true",
+        help="Disable logging to files",
+    )
+
     return parser.parse_args()
 
 def run_claude_with_prompt(
@@ -277,11 +293,67 @@ def main() -> None:
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
 
-    for _ in range(1, iterations + 1):
-        if sync_remote:
-            subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
+    # Generate session ID for this execution
+    session_id = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
-        prompt = (
+    for iteration_num in range(1, iterations + 1):
+        # Set up logging for this iteration
+        logging_manager = None
+        if not args.no_logging:
+            try:
+                logging_manager = LoggingManager(
+                    log_dir=args.log_dir,
+                    session_id=session_id,
+                    iteration=iteration_num
+                )
+            except Exception as e:
+                print(f"Warning: Failed to initialize logging for iteration {iteration_num}: {e}", 
+                      file=sys.stderr)
+                # Continue without logging
+        
+        # Use logging context manager for the iteration
+        if logging_manager:
+            with logging_manager:
+                # Set global logging manager for subprocess integration
+                set_logging_manager(logging_manager)
+                
+                # Record current branch
+                try:
+                    result = subprocess.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    current_branch = result.stdout.strip()
+                    logging_manager.metadata["branch_name"] = current_branch
+                except Exception:
+                    pass
+                
+                # Run the iteration
+                _run_single_iteration(
+                    args, improvement_prompt, objectives, branch_prefix,
+                    optional_prompt, sync_remote, iteration_num
+                )
+                
+                # Clear global logging manager
+                set_logging_manager(None)
+        else:
+            # Run without logging
+            _run_single_iteration(
+                args, improvement_prompt, objectives, branch_prefix,
+                optional_prompt, sync_remote, iteration_num
+            )
+
+
+def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,
+                         optional_prompt, sync_remote, iteration_num):
+    """Run a single optimization iteration."""
+    # The rest of the original loop content follows here
+    if sync_remote:
+        subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
+
+    prompt = (
             "# Overview of the Optimization Activity\n"
             "Background: we are carrying out an optimization initiative and "
             "are testing multiple approaches in parallel.\n"
@@ -304,8 +376,8 @@ def main() -> None:
             "# Evaluation Procedure\n"
         )
 
-        for objective_name, objective_prompt in objectives:
-            prompt += f"- {objective_name}: {objective_prompt}\n"
+    for objective_name, objective_prompt in objectives:
+        prompt += f"- {objective_name}: {objective_prompt}\n"
 
         prompt += (
             "\n"

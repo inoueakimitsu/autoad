@@ -24,6 +24,10 @@ Optional parameters:
 
 - `--optional-prompt`: Supplementary instructions for the optimization process
 - `--sync-remote`: Automatically sync with remote repository (fetches at start, pushes at end)
+- `--log-dir PATH`: Directory to save execution logs (default: ~/.autoad/logs)
+- `--no-logging`: Disable logging to files
+- `--iterations N`: Number of optimization iterations (default: 10)
+- `--branch-prefix PREFIX`: Prefix for optimization branches (default: 'optimize')
 
 ```bash
 uvx autoad \
@@ -96,6 +100,56 @@ uvx autoad \
 ```
 
 **Note**: The `--force` flag is used when pushing, which will overwrite remote branches. Ensure you have appropriate permissions and understand the implications before using this option.
+
+### Logging and Output Management
+
+Autoad automatically logs all execution output to help with debugging and analysis:
+
+- **Default location**: `~/.autoad/logs/`
+- **Directory structure**: `YYYY-MM-DD-HH-MM-SS-iter-N/` for each iteration
+- **Log files**: 
+  - `stdout.log`: Standard output from the iteration
+  - `stderr.log`: Error output from the iteration
+  - `metadata.json`: Execution metadata (branch name, timestamps, etc.)
+
+#### Logging Options
+
+```bash
+# Specify custom log directory
+uvx autoad --log-dir /path/to/logs ...
+
+# Set via environment variable
+export AUTOAD_LOG_DIR=/path/to/logs
+uvx autoad ...
+
+# Disable logging entirely
+uvx autoad --no-logging ...
+```
+
+#### Log Directory Structure Example
+
+```
+~/.autoad/logs/
+├── 2025-07-21-13-45-00-iter-1/
+│   ├── stdout.log
+│   ├── stderr.log
+│   └── metadata.json
+├── 2025-07-21-13-45-00-iter-2/
+│   ├── stdout.log
+│   ├── stderr.log
+│   └── metadata.json
+└── 2025-07-21-13-45-00-iter-3/
+    ├── stdout.log
+    ├── stderr.log
+    └── metadata.json
+```
+
+The logging system:
+- Preserves real-time console output while saving to files
+- Captures subprocess output (Git, Claude CLI, etc.)
+- Prevents accidental commits of log files to Git
+- Includes error handling with fallback directories
+- Protects against path traversal attacks
 
 ## Requirements
 
