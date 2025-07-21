@@ -6,6 +6,7 @@ for code improvements. It supports multi-objective optimization with automated
 evaluation and branch selection based on genetic algorithm principles.
 """
 import argparse
+import json
 import os
 import subprocess
 import shlex
@@ -13,7 +14,7 @@ import sys
 from typing import List, Tuple, Optional
 from datetime import datetime
 
-from .logging_utils import LoggingManager, set_logging_manager
+from .logging_utils import LoggingManager, set_logging_manager, get_logging_manager
 
 # Sets the maximum number of turns for each Claude CLI iteration.
 # One turn represents one response from Claude.
@@ -30,6 +31,9 @@ SUBPROCESS_TIMEOUT = SECONDS_PER_MINUTE * MINUTES_PER_HOUR * SUBPROCESS_TIMEOUT_
 # The evaluation metric values are rounded to this number of significant digits.
 # The evaluation metric values are displayed in the tag name.
 NUMBER_OF_SIGNIFICANT_DIGITS_FOR_EVALUATION_METRIC_VALUES = 3
+
+# Maximum length for prompt logging (1MB)
+MAX_PROMPT_LENGTH = 1_000_000
 
 BASE_ALLOWED_TOOLS = [
     # File operations
@@ -49,6 +53,8 @@ BASE_ALLOWED_TOOLS = [
     "Bash(find:*)",
     "Bash(grep:*)",
     "Bash(rg:*)",
+    "Bash(diff:*)",
+    "Bash(xargs:*)",
     # Git operations
     "Bash(git status:*)",
     "Bash(git diff:*)",
@@ -181,6 +187,67 @@ Examples:
 
     return parser.parse_args()
 
+
+def format_prompt_as_jsonl(
+    prompt: str,
+    max_turns: int,
+    allowed_tools: List[str],
+    continue_conversation: bool
+) -> str:
+    """Format prompt data as JSONL string.
+    
+    Args:
+        prompt: The prompt to send to Claude.
+        max_turns: Maximum number of response turns from Claude.
+        allowed_tools: List of tools Claude is allowed to use.
+        continue_conversation: If True, continues existing conversation.
+        
+    Returns:
+        JSONL formatted string with newline.
+    """
+    log_entry = {
+        "type": "user_input",
+        "message": prompt[:MAX_PROMPT_LENGTH] if len(prompt) > MAX_PROMPT_LENGTH else prompt,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Add optional fields only if they differ from defaults
+    if continue_conversation:
+        log_entry["continue_conversation"] = True
+    
+    if max_turns != MAX_TURNS_IN_EACH_ITERATION:
+        log_entry["max_turns"] = max_turns
+        
+    if allowed_tools:
+        log_entry["allowed_tools"] = allowed_tools
+    
+    return json.dumps(log_entry, ensure_ascii=False) + "\n"
+
+
+def log_prompt(
+    prompt: str,
+    max_turns: int,
+    allowed_tools: List[str],
+    continue_conversation: bool = False
+) -> None:
+    """Log prompt to stdout in JSONL format.
+    
+    Args:
+        prompt: The prompt to send to Claude.
+        max_turns: Maximum number of response turns from Claude.
+        allowed_tools: List of tools Claude is allowed to use.
+        continue_conversation: If True, continues existing conversation.
+    """
+    try:
+        jsonl_output = format_prompt_as_jsonl(
+            prompt, max_turns, allowed_tools, continue_conversation
+        )
+        print(jsonl_output, end="", flush=True)
+    except Exception as e:
+        # Log error but continue execution
+        print(f"Warning: Failed to log prompt: {e}", file=sys.stderr)
+
+
 def run_claude_with_prompt(
     prompt: str,
     max_turns: int,
@@ -203,6 +270,11 @@ def run_claude_with_prompt(
         subprocess.TimeoutExpired: When command times out.
         RuntimeError: When process stdin/stdout streams are None.
     """
+    # Log prompt if logging is enabled
+    logging_manager = get_logging_manager()
+    if logging_manager is not None:
+        log_prompt(prompt, max_turns, allowed_tools, continue_conversation)
+    
     command_options = [
         "claude",
         "--verbose",
