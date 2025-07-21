@@ -104,20 +104,15 @@ class LoggingManager:
     to log files while maintaining console output.
     """
     
-    def __init__(self, log_dir: Optional[str] = None,
-                 session_id: Optional[str] = None,
-                 iteration: Optional[int] = None):
+    def __init__(self, log_dir: Optional[str] = None):
         """Initialize LoggingManager for an iteration.
         
         Args:
             log_dir: Custom log directory path (overrides defaults).
-            session_id: Session identifier (auto-generated if None).
-            iteration: Iteration number for directory naming.
         """
         self.log_dir = self._resolve_log_directory(log_dir)
-        self.session_id = session_id or self._generate_session_id()
-        self.iteration = iteration
-        self.iteration_dir = self._create_iteration_directory()
+        self.session_id = self._generate_session_id()  # Keep for metadata only
+        self.iteration_dir = None  # Will be created when entering context
         
         # File handles and original streams
         self.stdout_log: Optional[TextIO] = None
@@ -128,7 +123,7 @@ class LoggingManager:
         # Metadata for tracking execution details
         self.metadata: Dict[str, Any] = {
             "session_id": self.session_id,
-            "iteration": self.iteration,
+            "iteration_start_time": None,  # Will be set when creating directory
             "start_time": None,
             "end_time": None,
             "status": "initialized"
@@ -165,6 +160,14 @@ class LoggingManager:
         """
         return datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     
+    def _generate_iteration_timestamp(self) -> str:
+        """Generate iteration timestamp with microsecond precision.
+        
+        Returns:
+            Formatted timestamp string YYYY-MM-DD-HH-MM-SS-microseconds.
+        """
+        return datetime.now().strftime("%Y-%m-%d-%H-%M-%S-%f")
+    
     def _create_iteration_directory(self) -> str:
         """Create iteration-specific directory with proper permissions.
         
@@ -174,9 +177,12 @@ class LoggingManager:
         Raises:
             DirectoryCreationError: If directory creation fails.
         """
-        # Validate and sanitize directory name components
-        session_id = self._sanitize_filename(self.session_id)
-        dir_name = f"{session_id}-iter-{self.iteration}"
+        # Generate iteration timestamp
+        timestamp = self._generate_iteration_timestamp()
+        self.metadata["iteration_start_time"] = timestamp
+        
+        # Validate and sanitize directory name
+        dir_name = self._sanitize_filename(timestamp)
         
         # Prevent path traversal attacks
         if '..' in dir_name or '/' in dir_name or '\\' in dir_name:
@@ -191,11 +197,32 @@ class LoggingManager:
             raise DirectoryCreationError(
                 "Directory path escapes log directory")
         
+        # Retry mechanism for handling concurrent directory creation
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Create with restricted permissions (owner only)
+                os.makedirs(full_path, mode=0o700, exist_ok=False)
+                break  # Success, exit retry loop
+            except FileExistsError:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise DirectoryCreationError(
+                        f"Failed to create unique directory after {max_retries} attempts")
+                
+                # Generate new timestamp and retry
+                import time
+                time.sleep(0.001)  # Brief pause before retry
+                timestamp = self._generate_iteration_timestamp()
+                self.metadata["iteration_start_time"] = timestamp
+                dir_name = self._sanitize_filename(timestamp)
+                full_path = os.path.join(self.log_dir, dir_name)
+                full_path = os.path.abspath(full_path)
+        
         try:
-            # Create with restricted permissions (owner only)
-            os.makedirs(full_path, mode=0o700, exist_ok=True)
-            
-            # Verify permissions on existing directory
+            # Verify permissions on directory
             if not os.access(full_path, os.W_OK):
                 raise DirectoryCreationError(
                     f"Directory exists but is not writable: {full_path}")
@@ -256,8 +283,10 @@ class LoggingManager:
         try:
             import tempfile
             temp_base = tempfile.gettempdir()
-            fallback_path = os.path.join(temp_base, "autoad_logs", 
-                                       f"{self.session_id}-iter-{self.iteration}")
+            # Use iteration timestamp for fallback directory as well
+            timestamp = self._generate_iteration_timestamp()
+            self.metadata["iteration_start_time"] = timestamp
+            fallback_path = os.path.join(temp_base, "autoad_logs", timestamp)
             os.makedirs(fallback_path, mode=0o700, exist_ok=True)
             print(f"Warning: Using fallback log directory: {fallback_path}", 
                   file=sys.stderr)
@@ -272,6 +301,9 @@ class LoggingManager:
             Self for use in with statement.
         """
         try:
+            # Create iteration directory when entering context
+            self.iteration_dir = self._create_iteration_directory()
+            
             # Create log files
             stdout_path = os.path.join(self.iteration_dir, "stdout.log")
             stderr_path = os.path.join(self.iteration_dir, "stderr.log")

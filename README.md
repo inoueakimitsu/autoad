@@ -106,11 +106,11 @@ uvx autoad \
 Autoad automatically logs all execution output to help with debugging and analysis:
 
 - **Default location**: `~/.autoad/logs/`
-- **Directory structure**: `YYYY-MM-DD-HH-MM-SS-iter-N/` for each iteration
+- **Directory structure**: `YYYY-MM-DD-HH-MM-SS-microseconds/` for each iteration (timestamp with microsecond precision)
 - **Log files**: 
   - `stdout.log`: Standard output from the iteration
   - `stderr.log`: Error output from the iteration
-  - `metadata.json`: Execution metadata (branch name, timestamps, etc.)
+  - `metadata.json`: Execution metadata (session_id, iteration_start_time, branch name, timestamps, etc.)
 
 #### Logging Options
 
@@ -130,19 +130,21 @@ uvx autoad --no-logging ...
 
 ```
 ~/.autoad/logs/
-├── 2025-07-21-13-45-00-iter-1/
+├── 2025-07-21-13-45-00-123456/     # Iteration 1 (with microseconds)
 │   ├── stdout.log
 │   ├── stderr.log
 │   └── metadata.json
-├── 2025-07-21-13-45-00-iter-2/
+├── 2025-07-21-13-45-01-789012/     # Iteration 2
 │   ├── stdout.log
 │   ├── stderr.log
 │   └── metadata.json
-└── 2025-07-21-13-45-00-iter-3/
+└── 2025-07-21-13-45-02-345678/     # Iteration 3
     ├── stdout.log
     ├── stderr.log
     └── metadata.json
 ```
+
+**Note**: Each iteration now creates its own directory based on the iteration start timestamp with microsecond precision. This ensures unique directories even when iterations run in parallel, eliminating the need for session IDs and iteration numbers in the directory names.
 
 The logging system:
 - Preserves real-time console output while saving to files

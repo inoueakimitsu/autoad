@@ -124,22 +124,19 @@ class TestLoggingManager:
         manager = LoggingManager()
         
         assert manager.session_id is not None
-        assert manager.iteration is None
+        assert manager.iteration_dir is None  # Created when entering context
         assert manager.log_dir.endswith(".autoad/logs")
         assert manager.metadata["status"] == "initialized"
     
     def test_init_with_custom_values(self):
         """Test initialization with custom values."""
         manager = LoggingManager(
-            log_dir=self.temp_dir,
-            session_id="test-session",
-            iteration=5
+            log_dir=self.temp_dir
         )
         
         assert manager.log_dir == self.temp_dir
-        assert manager.session_id == "test-session"
-        assert manager.iteration == 5
-        assert "test-session-iter-5" in manager.iteration_dir
+        assert manager.session_id is not None
+        assert manager.iteration_dir is None  # Created when entering context
     
     def test_resolve_log_directory_priority(self):
         """Test log directory resolution priority."""
@@ -173,19 +170,23 @@ class TestLoggingManager:
     def test_create_iteration_directory(self):
         """Test iteration directory creation."""
         manager = LoggingManager(
-            log_dir=self.temp_dir,
-            session_id="test",
-            iteration=1
+            log_dir=self.temp_dir
         )
         
-        expected_dir = os.path.join(self.temp_dir, "test-iter-1")
-        assert os.path.exists(expected_dir)
-        assert manager.iteration_dir == expected_dir
-        
-        # Check permissions (Unix only)
-        if hasattr(os, 'stat'):
-            stat_info = os.stat(expected_dir)
-            assert stat_info.st_mode & 0o777 == 0o700
+        # Directory is created when entering context
+        with manager:
+            assert manager.iteration_dir is not None
+            assert os.path.exists(manager.iteration_dir)
+            
+            # Check that directory name contains timestamp with microseconds
+            dir_name = os.path.basename(manager.iteration_dir)
+            parts = dir_name.split('-')
+            assert len(parts) == 7  # YYYY-MM-DD-HH-MM-SS-microseconds
+            
+            # Check permissions (Unix only)
+            if hasattr(os, 'stat'):
+                stat_info = os.stat(manager.iteration_dir)
+                assert stat_info.st_mode & 0o777 == 0o700
     
     def test_create_directory_error(self):
         """Test error handling when directory creation fails."""
@@ -194,19 +195,17 @@ class TestLoggingManager:
         with open(bad_path, 'w') as f:
             f.write("blocking file")
         
-        with pytest.raises(DirectoryCreationError):
-            LoggingManager(
-                log_dir=bad_path,
-                session_id="test",
-                iteration=1
-            )
+        manager = LoggingManager(log_dir=self.temp_dir)
+        manager.log_dir = bad_path  # Force bad path
+        
+        with pytest.raises(LogFileError):  # Changed to LogFileError as it's wrapped
+            with manager:
+                pass  # Directory creation should fail
     
     def test_context_manager_basic(self):
         """Test basic context manager functionality."""
         manager = LoggingManager(
-            log_dir=self.temp_dir,
-            session_id="test",
-            iteration=1
+            log_dir=self.temp_dir
         )
         
         original_stdout = sys.stdout
@@ -243,9 +242,7 @@ class TestLoggingManager:
     def test_context_manager_with_exception(self):
         """Test context manager handles exceptions properly."""
         manager = LoggingManager(
-            log_dir=self.temp_dir,
-            session_id="test",
-            iteration=1
+            log_dir=self.temp_dir
         )
         
         original_stdout = sys.stdout
@@ -273,9 +270,7 @@ class TestLoggingManager:
     def test_save_metadata(self):
         """Test metadata saving."""
         manager = LoggingManager(
-            log_dir=self.temp_dir,
-            session_id="test",
-            iteration=1
+            log_dir=self.temp_dir
         )
         
         # Add custom metadata
@@ -290,13 +285,61 @@ class TestLoggingManager:
         with open(metadata_path, 'r') as f:
             saved_metadata = json.load(f)
         
-        assert saved_metadata["session_id"] == "test"
-        assert saved_metadata["iteration"] == 1
+        assert saved_metadata["session_id"] is not None
+        assert saved_metadata["iteration_start_time"] is not None
         assert saved_metadata["custom_field"] == "custom_value"
         assert saved_metadata["branch_name"] == "test-branch"
         assert saved_metadata["status"] == "completed"
         assert "start_time" in saved_metadata
         assert "end_time" in saved_metadata
+    
+    def test_iteration_timestamp_generation(self):
+        """Test that timestamp is generated in correct format with microseconds."""
+        manager = LoggingManager(log_dir=self.temp_dir)
+        
+        timestamp = manager._generate_iteration_timestamp()
+        
+        # Check format YYYY-MM-DD-HH-MM-SS-microseconds
+        parts = timestamp.split('-')
+        assert len(parts) == 7
+        
+        # Verify it's a valid timestamp
+        try:
+            # Reconstruct without microseconds for datetime parsing
+            dt_str = '-'.join(parts[:6])
+            datetime.strptime(dt_str, "%Y-%m-%d-%H-%M-%S")
+            
+            # Check microseconds are 6 digits
+            assert len(parts[6]) == 6
+            assert parts[6].isdigit()
+        except ValueError:
+            pytest.fail("Timestamp does not match expected format")
+    
+    def test_directory_uniqueness(self):
+        """Test that multiple managers create unique directories."""
+        manager1 = LoggingManager(log_dir=self.temp_dir)
+        manager2 = LoggingManager(log_dir=self.temp_dir)
+        
+        with manager1:
+            with manager2:
+                assert manager1.iteration_dir != manager2.iteration_dir
+                assert os.path.exists(manager1.iteration_dir)
+                assert os.path.exists(manager2.iteration_dir)
+    
+    def test_no_session_id_in_directory(self):
+        """Test that directory name does not contain session ID or iter-N."""
+        manager = LoggingManager(log_dir=self.temp_dir)
+        
+        with manager:
+            dir_name = os.path.basename(manager.iteration_dir)
+            assert "iter-" not in dir_name
+            
+            # Directory name should be timestamp with microseconds
+            parts = dir_name.split('-')
+            assert len(parts) == 7  # YYYY-MM-DD-HH-MM-SS-microseconds
+            
+            # The iteration timestamp should have microseconds while session_id doesn't
+            assert len(parts[6]) == 6  # microseconds part
 
 
 class TestUtilityFunctions:
@@ -344,21 +387,21 @@ class TestIntegration:
     
     def test_multiple_iterations(self):
         """Test logging across multiple iterations."""
-        session_id = "test-session"
+        iteration_dirs = []
         
         for i in range(1, 4):
             manager = LoggingManager(
-                log_dir=self.temp_dir,
-                session_id=session_id,
-                iteration=i
+                log_dir=self.temp_dir
             )
             
             with manager:
                 print(f"Iteration {i} output")
+                iteration_dirs.append(manager.iteration_dir)
         
-        # Check all directories exist
-        for i in range(1, 4):
-            iter_dir = os.path.join(self.temp_dir, f"{session_id}-iter-{i}")
+        # Check all directories exist and are unique
+        assert len(set(iteration_dirs)) == 3  # All unique
+        
+        for i, iter_dir in enumerate(iteration_dirs, 1):
             assert os.path.exists(iter_dir)
             
             # Check log content
@@ -370,9 +413,7 @@ class TestIntegration:
         import threading
         
         manager = LoggingManager(
-            log_dir=self.temp_dir,
-            session_id="concurrent",
-            iteration=1
+            log_dir=self.temp_dir
         )
         
         def write_output(thread_id):

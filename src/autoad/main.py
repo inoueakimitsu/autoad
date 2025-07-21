@@ -293,18 +293,13 @@ def main() -> None:
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
 
-    # Generate session ID for this execution
-    session_id = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-
     for iteration_num in range(1, iterations + 1):
         # Set up logging for this iteration
         logging_manager = None
         if not args.no_logging:
             try:
                 logging_manager = LoggingManager(
-                    log_dir=args.log_dir,
-                    session_id=session_id,
-                    iteration=iteration_num
+                    log_dir=args.log_dir
                 )
             except Exception as e:
                 print(f"Warning: Failed to initialize logging for iteration {iteration_num}: {e}", 
