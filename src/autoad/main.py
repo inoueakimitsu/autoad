@@ -94,8 +94,11 @@ BASE_ALLOWED_TOOLS = [
     "Bash(node:*)",
     "Bash(npx:*)",
     "Bash(npm:*)",
+    "Bash(awk:*)",
+    "Bash(chmod:*)",
     # Long-running processes
     "Bash(nohup:*)",
+    "Bash(for:*)",
     # Special tools (called directly)
     "mcp__o3",
 ]
