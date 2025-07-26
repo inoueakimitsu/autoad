@@ -295,21 +295,22 @@ def run_claude_with_prompt(
     command_options.extend([
         f"--max-turns {max_turns}",
         "--output-format stream-json",
-        f"--allowedTools '{','.join(allowed_tools)}'",
-        "-p"
     ])
 
     if dry_run:
         # Dry run mode: display the command without executing it
-        print("\n" + "="*60)
-        print("\nDry Run Mode: Command to be executed\n")
+        print("\n" + "#"*60)
         
         # Remove the -p option for interactive mode
         interactive_options = [opt for opt in command_options if opt != "-p"]
         full_command = " ".join(interactive_options) + " " + shlex.quote(prompt)
         print(full_command)
-        print("="*60 + "\n")
-        return ["Dry run mode: command displayed without execution"]
+        return ["Dry run mode: command displayed without execution"]        
+
+    command_options.extend([
+        f"--allowedTools '{','.join(allowed_tools)}'",
+        "-p"
+    ])
 
     command = [
         "bash",
