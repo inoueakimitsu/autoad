@@ -183,3 +183,20 @@ The logging system:
 - macOS, Linux or WSL
 - Claude Code installed and configured. Due to intensive usage of the coding agent, we strongly recommend subscribing to the Claude MAX plan for optimal performance and to avoid rate limiting.
 - Git repository (for tracking optimization history)
+
+## Running Development Version
+
+To run a development version of autoad from a local repository without using `uvx`, you can clone the repository and use `uv run` with the `--project` option:
+
+```bash
+# Clone the autoad repository
+git clone https://github.com/inoueakimitsu/autoad
+
+# Run autoad from a different project directory
+uv run --project ../autoad python -m autoad.main --help
+```
+
+In this example:
+- `../autoad` is the path to your cloned autoad repository
+- The command runs autoad using the development code from that repository
+
