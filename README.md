@@ -101,6 +101,30 @@ uvx autoad \
 
 **Note**: The `--force` flag is used when pushing, which will overwrite remote branches. Ensure you have appropriate permissions and understand the implications before using this option.
 
+### Dry-Run Mode
+
+The `--dry-run` option allows you to preview what commands would be executed without actually running them:
+
+- **Command preview**: Displays the exact Claude CLI commands that would be executed
+- **Interactive mode hints**: Shows how to run the same commands interactively (without `-p` option)
+- **Safe validation**: Verify your prompts and tool permissions before actual execution
+- **No side effects**: Skips all Git operations and Claude CLI execution
+- **Automatic iteration limit**: Forces iterations to 1 (with warning if different value specified)
+
+This is particularly useful for:
+- **Prompt validation**: Check that your improvement and objective prompts are correctly formatted
+- **Permission testing**: Verify Claude has necessary tool permissions before long-running optimization
+- **Command debugging**: See exact commands that will be executed
+- **Learning**: Understand how autoad constructs Claude CLI commands
+
+Example:
+```bash
+uvx autoad \
+  --improvement-prompt "Optimize algorithm performance" \
+  --objective accuracy "Run tests and extract accuracy score" \
+  --dry-run
+```
+
 ### Logging and Output Management
 
 Autoad automatically logs all execution output to help with debugging and analysis:

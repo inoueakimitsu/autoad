@@ -185,6 +185,12 @@ Examples:
         help="Disable logging to files",
     )
 
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Dry Run Mode: Only display commands without executing them",
+    )
+
     return parser.parse_args()
 
 
@@ -253,6 +259,7 @@ def run_claude_with_prompt(
     max_turns: int,
     allowed_tools: List[str],
     continue_conversation: bool = False,
+    dry_run: bool = False,
 ) -> List[str]:
     """Run a conversation with Claude.
 
@@ -261,6 +268,7 @@ def run_claude_with_prompt(
         max_turns: Maximum number of response turns from Claude.
         allowed_tools: List of tools Claude is allowed to use.
         continue_conversation: If True, adds the --continue option.
+        dry_run: If True, displays the command without executing it.
 
     Returns:
         List of response lines from Claude.
@@ -270,10 +278,11 @@ def run_claude_with_prompt(
         subprocess.TimeoutExpired: When command times out.
         RuntimeError: When process stdin/stdout streams are None.
     """
-    # Log prompt if logging is enabled
-    logging_manager = get_logging_manager()
-    if logging_manager is not None:
-        log_prompt(prompt, max_turns, allowed_tools, continue_conversation)
+    # Log prompt if logging is enabled (skip in dry-run mode)
+    if not dry_run:
+        logging_manager = get_logging_manager()
+        if logging_manager is not None:
+            log_prompt(prompt, max_turns, allowed_tools, continue_conversation)
     
     command_options = [
         "claude",
@@ -289,6 +298,18 @@ def run_claude_with_prompt(
         f"--allowedTools '{','.join(allowed_tools)}'",
         "-p"
     ])
+
+    if dry_run:
+        # Dry run mode: display the command without executing it
+        print("\n" + "="*60)
+        print("\nDry Run Mode: Command to be executed\n")
+        
+        # Remove the -p option for interactive mode
+        interactive_options = [opt for opt in command_options if opt != "-p"]
+        full_command = " ".join(interactive_options) + " " + shlex.quote(prompt)
+        print(full_command)
+        print("="*60 + "\n")
+        return ["Dry run mode: command displayed without execution"]
 
     command = [
         "bash",
@@ -364,11 +385,20 @@ def main() -> None:
     optional_prompt: Optional[str] = args.optional_prompt
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
+    dry_run: bool = args.dry_run
+
+    # Set default log directory if not specified
+    if dry_run:
+        print("=== DRY RUN MODE ===")
+        if iterations != 1:
+            print(f"Warning: iterations={iterations} is ignored in dry run mode, "
+                  f"defaulting to 1 iteration.")
+            iterations = 1
 
     for iteration_num in range(1, iterations + 1):
         # Set up logging for this iteration
         logging_manager = None
-        if not args.no_logging:
+        if not args.no_logging and not dry_run:  # ドライランモードではログ出力を行わない
             try:
                 logging_manager = LoggingManager(
                     log_dir=args.log_dir
@@ -417,8 +447,13 @@ def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,
                          optional_prompt, sync_remote, iteration_num):
     """Run a single optimization iteration."""
     # The rest of the original loop content follows here
+    dry_run = args.dry_run
+    
     if sync_remote:
-        subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
+        if dry_run:
+            print("Dry Run Mode: sync_remote (git fetch --all --tags) is skipped")
+        else:
+            subprocess.run(["git", "fetch", "--all", "--tags"], check=True)
 
     prompt = (
             "# Overview of the Optimization Activity\n"
@@ -446,127 +481,129 @@ def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,
     for objective_name, objective_prompt in objectives:
         prompt += f"- {objective_name}: {objective_prompt}\n"
 
+    prompt += (
+        "\n"
+        "# Branch-Selection Policy\n"
+        "By emulating evolutionary and genetic algorithms, choose the optimal "
+        "branch to use as the basis for improvements from the following four "
+        "perspectives:\n"
+        "1. Deepening Improvements (exploitation)\n"
+        "   - Further improve a branch whose evaluation score is already relatively "
+        "high, or a branch whose score is low but shows growth potential.\n"
+        "\n"
+        "2. Exploration (exploration)\n"
+        "   - Search for better solutions by trying out new ideas.\n"
+        "\n"
+        "3. Combining Ideas (crossover)\n"
+        "   - Combine the best features of different branches.\n"
+        "   - Produce new improvement methods by combining existing techniques.\n"
+        "\n"
+        "4. Ablation (ablation)\n"
+        "   - Roll back some of the changes added in existing branches, observe "
+        "their impact, and use that knowledge to devise solutions.\n"
+        "   - Accumulate knowledge that identifies the causes of improvements or regressions.\n"
+        "\n"
+        "# How to Use Evaluation Information\n"
+        "Refer to the following information when evaluating each branch:\n"
+        f"- Evaluation metrics recorded in Git tags "
+        f"(see them with `git tag -l '{branch_prefix}-eval-*' --sort=-version:refname`)\n"
+        "- Tags associated with each commit (`git tag --contains <commit-hash>`)\n"
+        "- Change descriptions in commit messages\n"
+        "\n"
+        "# Detailed Work Procedure\n"
+        "1. Check out the optimal branch selected by the policy above.\n"
+        f"   Only branches whose names start with the prefix "
+        f"`{branch_prefix}/` may be checked out.\n"
+        f"   If no branch with the `{branch_prefix}/` prefix exists, "
+        f"use the current branch as the starting point.\n"
+        "2. Create a new derivative branch based on that branch.\n"
+        "3. If necessary, incorporate ideas from other branches using the commands below:\n"
+        "   - `git merge` or `git cherry-pick` when you actually want to pull in code\n"
+        "   - `git merge --no-ff -s ours <branch-to-merge>` when you only adopt the idea\n"
+        "4. After planning, start the improvement work:\n"
+        "   - Consider conducting a literature survey.\n"
+        "   - Most importantly, run experiments such as debugging and analyzing "
+        "intermediate results, observe the outcomes, and devise your solution accordingly.\n"
+        "   - Do not commit yet; I will tell you when to commit.\n"
+        "\n"
+        "# Naming Convention for the New Branch\n"
+        f"- Prefix  : Must start with `{branch_prefix}/`.\n"
+        "- Name   : Concatenate 2–4 English words that describe the improvement, "
+        "separated by hyphens (-).\n"
+        f"- Examples : `{branch_prefix}/remove-temporal-reward`, "
+        f"`{branch_prefix}/prefetch-fisher-info-matrix`\n"
+        "- Note   : Do not include meta-information such as dates, scores, or assignee names.\n"
+        "\n"
+        "# Notes\n"
+        "- Proceed with an *ultrathink* mindset.\n"
+    )
+
+    if optional_prompt:
         prompt += (
             "\n"
-            "# Branch-Selection Policy\n"
-            "By emulating evolutionary and genetic algorithms, choose the optimal "
-            "branch to use as the basis for improvements from the following four "
-            "perspectives:\n"
-            "1. Deepening Improvements (exploitation)\n"
-            "   - Further improve a branch whose evaluation score is already relatively "
-            "high, or a branch whose score is low but shows growth potential.\n"
-            "\n"
-            "2. Exploration (exploration)\n"
-            "   - Search for better solutions by trying out new ideas.\n"
-            "\n"
-            "3. Combining Ideas (crossover)\n"
-            "   - Combine the best features of different branches.\n"
-            "   - Produce new improvement methods by combining existing techniques.\n"
-            "\n"
-            "4. Ablation (ablation)\n"
-            "   - Roll back some of the changes added in existing branches, observe "
-            "their impact, and use that knowledge to devise solutions.\n"
-            "   - Accumulate knowledge that identifies the causes of improvements or regressions.\n"
-            "\n"
-            "# How to Use Evaluation Information\n"
-            "Refer to the following information when evaluating each branch:\n"
-            f"- Evaluation metrics recorded in Git tags "
-            f"(see them with `git tag -l '{branch_prefix}-eval-*' --sort=-version:refname`)\n"
-            "- Tags associated with each commit (`git tag --contains <commit-hash>`)\n"
-            "- Change descriptions in commit messages\n"
-            "\n"
-            "# Detailed Work Procedure\n"
-            "1. Check out the optimal branch selected by the policy above.\n"
-            f"   Only branches whose names start with the prefix "
-            f"`{branch_prefix}/` may be checked out.\n"
-            f"   If no branch with the `{branch_prefix}/` prefix exists, "
-            f"use the current branch as the starting point.\n"
-            "2. Create a new derivative branch based on that branch.\n"
-            "3. If necessary, incorporate ideas from other branches using the commands below:\n"
-            "   - `git merge` or `git cherry-pick` when you actually want to pull in code\n"
-            "   - `git merge --no-ff -s ours <branch-to-merge>` when you only adopt the idea\n"
-            "4. After planning, start the improvement work:\n"
-            "   - Consider conducting a literature survey.\n"
-            "   - Most importantly, run experiments such as debugging and analyzing "
-            "intermediate results, observe the outcomes, and devise your solution accordingly.\n"
-            "   - Do not commit yet; I will tell you when to commit.\n"
-            "\n"
-            "# Naming Convention for the New Branch\n"
-            f"- Prefix  : Must start with `{branch_prefix}/`.\n"
-            "- Name   : Concatenate 2–4 English words that describe the improvement, "
-            "separated by hyphens (-).\n"
-            f"- Examples : `{branch_prefix}/remove-temporal-reward`, "
-            f"`{branch_prefix}/prefetch-fisher-info-matrix`\n"
-            "- Note   : Do not include meta-information such as dates, scores, or assignee names.\n"
-            "\n"
-            "# Notes\n"
-            "- Proceed with an *ultrathink* mindset.\n"
+            "# Additional Instructions\n"
+            f"{optional_prompt}\n"
         )
 
-        if optional_prompt:
-            prompt += (
-                "\n"
-                "# Additional Instructions\n"
-                f"{optional_prompt}\n"
-            )
+    run_claude_with_prompt(
+        prompt=prompt,
+        max_turns=MAX_TURNS_IN_EACH_ITERATION,
+        allowed_tools=BASE_ALLOWED_TOOLS,
+        continue_conversation=False,  # False only for first iteration
+        dry_run=dry_run,
+    )
 
-        run_claude_with_prompt(
-            prompt=prompt,
-            max_turns=MAX_TURNS_IN_EACH_ITERATION,
-            allowed_tools=BASE_ALLOWED_TOOLS,
-            continue_conversation=False,  # False only for first iteration
+    commit_prompt = (
+        "# Creating the Commit Message\n"
+        "Review the output of `git diff` and summarize the changes in the commit message.\n"
+        "\n"
+        "When writing the commit message, observe the following rules:\n"
+        "- Uninformative expressions such as \"Fix bug\" or \"Update code\" are prohibited.\n"
+        "- Do not include unnecessary long logs or stack traces.\n"
+        "- Because it is not yet known whether this commit leads to an improvement, "
+        "avoid value-laden wording.\n"
+        "\n"
+        "After adding the necessary files, run\n"
+        '`git commit -m "$FULL_MESSAGE"`\n'
+        "to create the commit once the message is ready.\n"
+        "If you referred to or copied information from another branch, "
+        "include at least the fact that it was merged in the commit message.\n"
+        "If you adopted only the idea and discarded the code itself, you may also use\n"
+        "`git merge --no-ff -s ours <branch-to-merge>` to record that.\n"
+        "Note: The timing for adding Git tags will be given later, so do not tag yet.\n"
+        "Continue until the commit is complete.\n"
+    )
+
+    if optional_prompt:
+        prompt += (
+            "\n"
+            "# Additional Instructions\n"
+            f"{optional_prompt}\n"
         )
 
-        commit_prompt = (
-            "# Creating the Commit Message\n"
-            "Review the output of `git diff` and summarize the changes in the commit message.\n"
-            "\n"
-            "When writing the commit message, observe the following rules:\n"
-            "- Uninformative expressions such as \"Fix bug\" or \"Update code\" are prohibited.\n"
-            "- Do not include unnecessary long logs or stack traces.\n"
-            "- Because it is not yet known whether this commit leads to an improvement, "
-            "avoid value-laden wording.\n"
-            "\n"
-            "After adding the necessary files, run\n"
-            '`git commit -m "$FULL_MESSAGE"`\n'
-            "to create the commit once the message is ready.\n"
-            "If you referred to or copied information from another branch, "
-            "include at least the fact that it was merged in the commit message.\n"
-            "If you adopted only the idea and discarded the code itself, you may also use\n"
-            "`git merge --no-ff -s ours <branch-to-merge>` to record that.\n"
+    run_claude_with_prompt(
+        prompt=commit_prompt,
+        max_turns=MAX_TURNS_IN_EACH_ITERATION,
+        allowed_tools=BASE_ALLOWED_TOOLS,
+        continue_conversation=True,
+        dry_run=dry_run,
+    )
+
+    for objective_index, (objective_name, objective_prompt) in enumerate(objectives):
+        objective_prompt = (
+            f"# Evaluation Task {objective_index + 1}\n"
+            "Carry out the evaluation task as instructed below.\n"
+            f"{objective_prompt}\n"
+            f"The value obtained will be the evaluation metric for \"{objective_name}\".\n"
             "Note: The timing for adding Git tags will be given later, so do not tag yet.\n"
-            "Continue until the commit is complete.\n"
         )
 
-        if optional_prompt:
-            prompt += (
-                "\n"
-                "# Additional Instructions\n"
-                f"{optional_prompt}\n"
-            )
-
-        run_claude_with_prompt(
-            prompt=commit_prompt,
-            max_turns=MAX_TURNS_IN_EACH_ITERATION,
-            allowed_tools=BASE_ALLOWED_TOOLS,
-            continue_conversation=True,
-        )
-
-        for objective_index, (objective_name, objective_prompt) in enumerate(objectives):
-            objective_prompt = (
-                f"# Evaluation Task {objective_index + 1}\n"
-                "Carry out the evaluation task as instructed below.\n"
-                f"{objective_prompt}\n"
-                f"The value obtained will be the evaluation metric for \"{objective_name}\".\n"
-                "Note: The timing for adding Git tags will be given later, so do not tag yet.\n"
-            )
-
-            objective_prompt += (
-                "If processing takes time, execute it in the background using `nohup`.\n"
-                " After execution, obtain the process ID and periodically run the `ps` command.\n"
-                " Each time, if the command is still running, execute the `sleep 60` command to wait for 1 minute.\n"
-                " Repeat this wait up to a maximum of 120 times. \n"            
-                "For example, refer to the following code when executing.: \n"
+        objective_prompt += (
+            "If processing takes time, execute it in the background using `nohup`.\n"
+            " After execution, obtain the process ID and periodically run the `ps` command.\n"
+            " Each time, if the command is still running, execute the `sleep 60` command to wait for 1 minute.\n"
+            " Repeat this wait up to a maximum of 120 times. \n"            
+            "For example, refer to the following code when executing.: \n"
 """
     #!/bin/bash
     nohup your_command_here > process_output.log 2>&1 &
@@ -586,14 +623,15 @@ def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,
     kill "$tail_pid"
     echo "Monitoring finished. Output log: process_output.log"
 """
-            )
+        )
 
-            run_claude_with_prompt(
-                prompt=objective_prompt,
-                max_turns=MAX_TURNS_IN_EACH_ITERATION,
-                allowed_tools=BASE_ALLOWED_TOOLS,
-                continue_conversation=True,
-            )
+        run_claude_with_prompt(
+            prompt=objective_prompt,
+            max_turns=MAX_TURNS_IN_EACH_ITERATION,
+            allowed_tools=BASE_ALLOWED_TOOLS,
+            continue_conversation=True,
+            dry_run=dry_run,
+        )
 
         tag_prompt = (
             "# Creating the Git Tag\n"
@@ -614,10 +652,14 @@ def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,
             max_turns=MAX_TURNS_IN_EACH_ITERATION,
             allowed_tools=BASE_ALLOWED_TOOLS,
             continue_conversation=True,
+            dry_run=dry_run,
         )
 
         if sync_remote:
-            subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
+            if dry_run:
+                print("Dry Run Mode: sync_remote (git push --all --tags --force) is skipped")
+            else:
+                subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
 
 if __name__ == "__main__":
     main()
