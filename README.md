@@ -28,6 +28,7 @@ Optional parameters:
 - `--no-logging`: Disable logging to files
 - `--iterations N`: Number of optimization iterations (default: 10)
 - `--branch-prefix PREFIX`: Prefix for optimization branches (default: 'optimize')
+- `--dry-run`: Preview commands without executing them (validates prompts and shows Claude CLI commands)
 
 ```bash
 uvx autoad \
