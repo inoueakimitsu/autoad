@@ -633,33 +633,33 @@ def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,
             dry_run=dry_run,
         )
 
-        tag_prompt = (
-            "# Creating the Git Tag\n"
-            "Create a Git tag in accordance with the following instructions.\n"
-            "The tag name must follow this format:\n"
-            f"{branch_prefix}-eval-YYYYMMDD-HHMMSS-"
-            "metricName1_metricValue1-metricName2_metricValue2-...\n"
-            "After deciding on the tag name, run\n"
-            "`git --no-pager tag -a <tag-name>`\n"
-            "to create the tag. Create it for the current HEAD commit.\n"
-            f"The number of significant digits for metric values is "
-            f"{NUMBER_OF_SIGNIFICANT_DIGITS_FOR_EVALUATION_METRIC_VALUES}. "
-            f"Scientific notation is acceptable.\n"
-        )
+    tag_prompt = (
+        "# Creating the Git Tag\n"
+        "Create a Git tag in accordance with the following instructions.\n"
+        "The tag name must follow this format:\n"
+        f"{branch_prefix}-eval-YYYYMMDD-HHMMSS-"
+        "metricName1_metricValue1-metricName2_metricValue2-...\n"
+        "After deciding on the tag name, run\n"
+        "`git --no-pager tag -a <tag-name>`\n"
+        "to create the tag. Create it for the current HEAD commit.\n"
+        f"The number of significant digits for metric values is "
+        f"{NUMBER_OF_SIGNIFICANT_DIGITS_FOR_EVALUATION_METRIC_VALUES}. "
+        f"Scientific notation is acceptable.\n"
+    )
 
-        run_claude_with_prompt(
-            prompt=tag_prompt,
-            max_turns=MAX_TURNS_IN_EACH_ITERATION,
-            allowed_tools=BASE_ALLOWED_TOOLS,
-            continue_conversation=True,
-            dry_run=dry_run,
-        )
+    run_claude_with_prompt(
+        prompt=tag_prompt,
+        max_turns=MAX_TURNS_IN_EACH_ITERATION,
+        allowed_tools=BASE_ALLOWED_TOOLS,
+        continue_conversation=True,
+        dry_run=dry_run,
+    )
 
-        if sync_remote:
-            if dry_run:
-                print("Dry Run Mode: sync_remote (git push --all --tags --force) is skipped")
-            else:
-                subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
+    if sync_remote:
+        if dry_run:
+            print("Dry Run Mode: sync_remote (git push --all --tags --force) is skipped")
+        else:
+            subprocess.run(["git", "push", "--all", "--tags", "--force"], check=True)
 
 if __name__ == "__main__":
     main()
