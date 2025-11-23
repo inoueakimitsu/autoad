@@ -11,8 +11,12 @@ import os
 import subprocess
 import shlex
 import sys
+import tempfile
+import shutil
+from multiprocessing import Pool, cpu_count
 from typing import List, Tuple, Optional
 from datetime import datetime
+from pathlib import Path
 
 from .logging_utils import LoggingManager, set_logging_manager, get_logging_manager
 
@@ -191,6 +195,13 @@ Examples:
         help="Dry Run Mode: Only display commands without executing them",
     )
 
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers using git worktree (default: 1, sequential execution)",
+    )
+
     return parser.parse_args()
 
 
@@ -252,6 +263,59 @@ def log_prompt(
     except Exception as e:
         # Log error but continue execution
         print(f"Warning: Failed to log prompt: {e}", file=sys.stderr)
+
+
+def create_worktree(base_path: str, worker_id: int) -> str:
+    """Create a git worktree for parallel processing.
+
+    Args:
+        base_path: Base directory path for creating worktrees.
+        worker_id: Unique identifier for the worker.
+
+    Returns:
+        Path to the created worktree.
+
+    Raises:
+        subprocess.CalledProcessError: When git worktree command fails.
+    """
+    worktree_path = os.path.join(base_path, f"autoad-worker-{worker_id}")
+
+    # Get current commit hash
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    current_commit = result.stdout.strip()
+
+    # Create worktree at the current commit (detached HEAD)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", worktree_path, current_commit],
+        check=True,
+        capture_output=True
+    )
+
+    return worktree_path
+
+
+def cleanup_worktree(worktree_path: str) -> None:
+    """Remove a git worktree.
+
+    Args:
+        worktree_path: Path to the worktree to remove.
+    """
+    try:
+        # Remove worktree from git
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", worktree_path],
+            check=True,
+            capture_output=True
+        )
+    except subprocess.CalledProcessError:
+        # If git worktree remove fails, try manual cleanup
+        if os.path.exists(worktree_path):
+            shutil.rmtree(worktree_path)
 
 
 def run_claude_with_prompt(
@@ -375,7 +439,7 @@ def run_claude_with_prompt(
 
 def main() -> None:
     """Entry point for the autoad optimization tool.
-    
+
     Orchestrates the multi-objective optimization process using evolutionary
     algorithms and Claude CLI for code improvements.
     """
@@ -387,6 +451,7 @@ def main() -> None:
     iterations: int = args.iterations or 10
     sync_remote: bool = args.sync_remote
     dry_run: bool = args.dry_run
+    workers: int = args.workers
 
     # Set default log directory if not specified
     if dry_run:
@@ -396,52 +461,159 @@ def main() -> None:
                   f"defaulting to 1 iteration.")
             iterations = 1
 
-    for iteration_num in range(1, iterations + 1):
-        # Set up logging for this iteration
-        logging_manager = None
-        if not args.no_logging and not dry_run:  # ドライランモードではログ出力を行わない
-            try:
-                logging_manager = LoggingManager(
-                    log_dir=args.log_dir
-                )
-            except Exception as e:
-                print(f"Warning: Failed to initialize logging for iteration {iteration_num}: {e}", 
-                      file=sys.stderr)
-                # Continue without logging
-        
-        # Use logging context manager for the iteration
-        if logging_manager:
-            with logging_manager:
-                # Set global logging manager for subprocess integration
-                set_logging_manager(logging_manager)
-                
-                # Record current branch
+    # Sequential execution (workers == 1)
+    if workers == 1:
+        for iteration_num in range(1, iterations + 1):
+            # Set up logging for this iteration
+            logging_manager = None
+            if not args.no_logging and not dry_run:  # ドライランモードではログ出力を行わない
                 try:
-                    result = subprocess.run(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        capture_output=True,
-                        text=True,
-                        check=True
+                    logging_manager = LoggingManager(
+                        log_dir=args.log_dir
                     )
-                    current_branch = result.stdout.strip()
-                    logging_manager.metadata["branch_name"] = current_branch
-                except Exception:
-                    pass
-                
-                # Run the iteration
+                except Exception as e:
+                    print(f"Warning: Failed to initialize logging for iteration {iteration_num}: {e}",
+                          file=sys.stderr)
+                    # Continue without logging
+
+            # Use logging context manager for the iteration
+            if logging_manager:
+                with logging_manager:
+                    # Set global logging manager for subprocess integration
+                    set_logging_manager(logging_manager)
+
+                    # Record current branch
+                    try:
+                        result = subprocess.run(
+                            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        current_branch = result.stdout.strip()
+                        logging_manager.metadata["branch_name"] = current_branch
+                    except Exception:
+                        pass
+
+                    # Run the iteration
+                    _run_single_iteration(
+                        args, improvement_prompt, objectives, branch_prefix,
+                        optional_prompt, sync_remote, iteration_num
+                    )
+
+                    # Clear global logging manager
+                    set_logging_manager(None)
+            else:
+                # Run without logging
                 _run_single_iteration(
                     args, improvement_prompt, objectives, branch_prefix,
                     optional_prompt, sync_remote, iteration_num
                 )
-                
-                # Clear global logging manager
-                set_logging_manager(None)
-        else:
-            # Run without logging
-            _run_single_iteration(
-                args, improvement_prompt, objectives, branch_prefix,
-                optional_prompt, sync_remote, iteration_num
-            )
+
+    # Parallel execution (workers > 1)
+    else:
+        if dry_run:
+            print(f"Parallel execution with {workers} workers would be performed in non-dry-run mode.")
+            print(f"Total {iterations} iterations would be distributed across {workers} workers.")
+            return
+
+        print(f"Starting parallel execution with {workers} workers for {iterations} iterations")
+
+        # Create temporary directory for worktrees
+        with tempfile.TemporaryDirectory(prefix="autoad-worktrees-") as worktree_base:
+            # Create worktrees
+            worktrees = []
+            print(f"Creating {workers} git worktrees...")
+            for worker_id in range(workers):
+                try:
+                    worktree_path = create_worktree(worktree_base, worker_id)
+                    worktrees.append(worktree_path)
+                    print(f"  Created worktree {worker_id + 1}/{workers}: {worktree_path}")
+                except Exception as e:
+                    print(f"Error creating worktree {worker_id}: {e}", file=sys.stderr)
+                    # Clean up already created worktrees
+                    for wt in worktrees:
+                        cleanup_worktree(wt)
+                    raise
+
+            try:
+                # Prepare worker arguments for all iterations
+                worker_args_list = []
+                for iteration_num in range(1, iterations + 1):
+                    worker_id = (iteration_num - 1) % workers
+                    worktree_path = worktrees[worker_id]
+                    worker_args_list.append((
+                        worktree_path, args, improvement_prompt, objectives,
+                        branch_prefix, optional_prompt, sync_remote, iteration_num
+                    ))
+
+                # Execute iterations in parallel using process pool
+                print(f"\nExecuting {iterations} iterations across {workers} workers...")
+                with Pool(processes=workers) as pool:
+                    results = pool.map(_worker_process, worker_args_list)
+
+                # Report results
+                print("\n" + "="*60)
+                print("Execution Summary:")
+                print("="*60)
+                successful = sum(1 for _, success, _ in results if success)
+                failed = len(results) - successful
+                print(f"Total iterations: {len(results)}")
+                print(f"Successful: {successful}")
+                print(f"Failed: {failed}")
+
+                if failed > 0:
+                    print("\nFailed iterations:")
+                    for iteration_num, success, error_msg in results:
+                        if not success:
+                            print(f"  Iteration {iteration_num}: {error_msg}")
+
+            finally:
+                # Clean up worktrees
+                print("\nCleaning up worktrees...")
+                for i, worktree_path in enumerate(worktrees):
+                    try:
+                        cleanup_worktree(worktree_path)
+                        print(f"  Removed worktree {i + 1}/{workers}")
+                    except Exception as e:
+                        print(f"Warning: Failed to cleanup worktree {worktree_path}: {e}",
+                              file=sys.stderr)
+
+
+def _worker_process(worker_args: Tuple) -> Tuple[int, bool, Optional[str]]:
+    """Worker process for parallel execution in a git worktree.
+
+    Args:
+        worker_args: Tuple of (worktree_path, args, improvement_prompt, objectives,
+                     branch_prefix, optional_prompt, sync_remote, iteration_num)
+
+    Returns:
+        Tuple of (iteration_num, success, error_message)
+    """
+    (worktree_path, args, improvement_prompt, objectives,
+     branch_prefix, optional_prompt, sync_remote, iteration_num) = worker_args
+
+    original_cwd = os.getcwd()
+    try:
+        # Change to worktree directory
+        os.chdir(worktree_path)
+
+        # Run the iteration
+        _run_single_iteration(
+            args, improvement_prompt, objectives, branch_prefix,
+            optional_prompt, sync_remote, iteration_num
+        )
+
+        return (iteration_num, True, None)
+
+    except Exception as e:
+        error_msg = f"Iteration {iteration_num} failed: {str(e)}"
+        print(error_msg, file=sys.stderr)
+        return (iteration_num, False, error_msg)
+
+    finally:
+        # Restore original working directory
+        os.chdir(original_cwd)
 
 
 def _run_single_iteration(args, improvement_prompt, objectives, branch_prefix,

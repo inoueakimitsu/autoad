@@ -29,6 +29,7 @@ Optional parameters:
 - `--iterations N`: Number of optimization iterations (default: 10)
 - `--branch-prefix PREFIX`: Prefix for optimization branches (default: 'optimize')
 - `--dry-run`: Preview commands without executing them (validates prompts and shows Claude CLI commands)
+- `--workers N`: Number of parallel workers using git worktree (default: 1, sequential execution)
 
 ```bash
 uvx autoad \
@@ -125,6 +126,45 @@ uvx autoad \
   --objective accuracy "Run tests and extract accuracy score" \
   --dry-run
 ```
+
+### Parallel Processing with Git Worktree
+
+The `--workers` option enables parallel execution of optimization iterations using git worktree:
+
+- **Parallel execution**: Run multiple iterations simultaneously on separate CPU cores
+- **Git worktree isolation**: Each worker operates in its own git worktree, preventing conflicts
+- **Automatic management**: Worktrees are created and cleaned up automatically
+- **Efficient resource usage**: Default is 1 worker (sequential), can be increased based on available CPU cores
+
+This is particularly useful for:
+- **Faster optimization**: Complete more iterations in less time
+- **Multi-core utilization**: Leverage modern multi-core processors
+- **Independent exploration**: Workers explore different optimization paths simultaneously
+- **Scalability**: Handle large-scale optimization problems efficiently
+
+Example:
+```bash
+# Run with 4 parallel workers
+uvx autoad \
+  --improvement-prompt "Optimize algorithm performance" \
+  --objective accuracy "Run tests and extract accuracy score" \
+  --iterations 100 \
+  --workers 4
+```
+
+**Important notes**:
+- Each worker creates a separate git worktree in a temporary directory
+- Workers are independent and don't share state during execution
+- All changes from workers are committed back to the main repository
+- Recommended to set `--workers` to the number of available CPU cores or less
+- The `--dry-run` option shows information about parallel execution without actually running it
+
+**How it works**:
+1. Creates N git worktrees (where N = number of workers)
+2. Distributes iterations across workers in round-robin fashion
+3. Each worker runs independently in its own worktree
+4. All worktrees are cleaned up automatically when execution completes
+5. Results from all workers are merged back to the main repository
 
 ### Logging and Output Management
 
